@@ -9,15 +9,18 @@ import sys
 import json
 import os
 
-
-def load_config(filename):
+def load_config(filename, prefix=None):
     """
     Returns:
         dict
     """
     with open(filename) as file:
         config = json.load(file)
-
+    if prefix is not None:
+        for key, val in config.items():
+            config[key] = os.path.join(prefix, val)
+    for key, val in config.items():
+        config[key] = os.path.abspath(val)
     # back-compat
     if 'csvFile' in config:
         config['modelCategoryFile'] = config['csvFile']

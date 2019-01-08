@@ -26,35 +26,46 @@ def _vec_to_array(pos):
     return np.array([pos.x, pos.y, pos.z])
 
 
-def create_house(houseID, config, cachefile=None):
-    objFile = os.path.join(config['prefix'], houseID, 'house.obj')
-    jsonFile = os.path.join(config['prefix'], houseID, 'house.json')
+def create_house(houseID, config, GridDet=0.05, RenderDoor=False, GenIndoorArea=False):
+    print('creating house {0:s} ...'.format(houseID))
+    if RenderDoor:
+        objFile = os.path.join(config['prefix'], houseID, 'house.obj')
+        jsonFile = os.path.join(config['prefix'], houseID, 'house.json')
+    else:
+        objFile = os.path.join(config['prefix'], houseID, 'house-no-doors.obj')
+        jsonFile = os.path.join(config['prefix'], houseID, 'house-no-doors.json')
     assert (os.path.isfile(objFile) and os.path.isfile(jsonFile)), '[Environment] house objects not found! objFile=<{}>'.format(objFile)
-    if cachefile is None:
-        cachefile = os.path.join(config['prefix'], houseID, 'cachedmap1k.pkl')
-    if not os.path.isfile(cachefile):
-        cachefile = None
     house = House(jsonFile, objFile, config["modelCategoryFile"],
-                  CachedFile=cachefile, GenRoomTypeMap=True)
+                  GenRoomTypeMap=False,
+                  GridDet=GridDet, DebugInfoOn=False,
+                  DebugMessages=False, GenIndoorArea=GenIndoorArea,
+                  RenderDoor=RenderDoor)
+    # print('creating house done ...')
     return house
 
-def local_create_house(h, config):
+def local_create_house(h, config, GridDet=0.05):
     if not isinstance(h, House):
-        h = create_house(h, config)
+        h = create_house(h, config, GridDet=GridDet)
     return h
 
 class Environment():
-    def __init__(self, api, house, config, seed=None):
+    def __init__(self, api, house, config, seed=None,
+                 GridDet=0.05, RenderDoor=False, StartIndoor=False):
         """
         Args:
             api: A RenderAPI or RenderAPIThread instance.
             house: either a house object or a house id
             config: configurations containing path to meta-data files
             seed: if not None, set the seed
+            GridDet: grid cell size of the 2d map for collision checking
         """
         self.config = config
+        self.startIndoor = StartIndoor
         if not isinstance(house, House):
-            house = create_house(house, config)
+            house = create_house(house, config,
+                                 GridDet=GridDet,
+                                 RenderDoor=RenderDoor,
+                                 GenIndoorArea=StartIndoor)
         self.house = house
         if not hasattr(house, '_id'):
             house._id = 0
@@ -139,6 +150,33 @@ class Environment():
         api_resolution = self.api.resolution()
         return (api_resolution.w, api_resolution.h)
 
+    def render_dist_map(self, room=None):
+        if room is None:
+            room = self.house.default_roomTp
+        connMap, que, inroomDist, self.maxConnDist = self.house.connMapDict[room]
+        valid_idx = connMap > -1
+        connMap[valid_idx] = np.floor(connMap[valid_idx] / np.max(connMap) * 255)
+        colormap = connMap.copy()
+        colormap = np.stack([colormap] * 3, axis=2)
+        colormap[connMap == -1, :] = np.array([244, 134, 66])
+        colormap = colormap.astype(np.uint8)
+        colormap = colormap[:, :, ::-1]
+        return colormap
+
+    def gen_locmap(self):
+        house = self.house
+        n_row = house.n_row
+        if self.cachedLocMap is None:
+            locMap = np.zeros((n_row[1] + 1, n_row[0] + 1, 3), dtype=np.uint8)
+            obsMap = self.house.obsMap.T
+            locMap[obsMap == 0] = 255
+            moveMap = self.house.moveMap.T
+            locMap[moveMap > 0] = np.array([200, 200, 255])
+            self.cachedLocMap = locMap.copy()
+        else:
+            locMap = self.cachedLocMap.copy()
+        return locMap
+
     def gen_2dmap(self, x=None, y=None, resolution=None):
         """
         Args:
@@ -156,20 +194,60 @@ class Environment():
 
         # TODO move cachedLocMap to House
         if self.cachedLocMap is None:
-            locMap = np.zeros((n_row + 1, n_row + 1, 3), dtype=np.uint8)
-            for i in range(n_row):  # w
-                for j in range(n_row):  # h
-                    if house.obsMap[i, j] == 0:
-                        locMap[j, i, :] = 255
-                    if house.canMove(i, j):
-                        locMap[j, i, :2] = 200  # purple
+            locMap = np.zeros((n_row[1] + 1, n_row[0] + 1, 3), dtype=np.uint8)
+            obsMap = self.house.obsMap.T
+            locMap[obsMap == 0] = 255
+            moveMap = self.house.moveMap.T
+            locMap[moveMap > 0] = np.array([200, 200, 255])
             self.cachedLocMap = locMap.copy()
         else:
             locMap = self.cachedLocMap.copy()
 
-        rad = house.robotRad / house.L_det * house.n_row
+        rad = house.robotRad / house.grid_det
         x, y = house.to_grid(x, y)
         cv2.circle(locMap, (x, y), int(rad), (255, 50, 50), thickness=-1)
+        locMap = cv2.resize(locMap, resolution)
+        return locMap
+
+    def gen_2dmap_with_traj(self, xs=None, ys=None, resolution=None):
+        """
+        Args:
+            xs, ys: series of agent's locations. Will use the current camera position by default.
+            resolution: (w, h) integer, same as the rendering by default.
+        Returns:
+            An RGB image of 2d localization, robot locates at (x, y)
+        """
+        if xs is None:
+            xs, ys = [self.cam.pos.x], [self.cam.pos.z]
+        if resolution is None:
+            resolution = self.resolution
+        house = self.house
+        n_row = house.n_row
+
+        # TODO move cachedLocMap to House
+        if self.cachedLocMap is None:
+            locMap = np.zeros((n_row[1] + 1, n_row[0] + 1, 3), dtype=np.uint8)
+            obsMap = self.house.obsMap.T
+            locMap[obsMap == 0] = 255
+            moveMap = self.house.moveMap.T
+            locMap[moveMap > 0] = np.array([200, 200, 255])
+            self.cachedLocMap = locMap.copy()
+        else:
+            locMap = self.cachedLocMap.copy()
+
+        rad = house.robotRad / house.grid_det
+        prev_point = None
+        for idx, (x, y) in enumerate(zip(xs, ys)):
+            x, y = house.to_grid(x, y)
+            if idx == 0:
+                cv2.circle(locMap, (x, y), int(rad) * 2, (255, 0, 0), thickness=-1)
+            elif idx == len(xs) - 1:
+                cv2.circle(locMap, (x, y), int(rad) * 2, (0, 0, 255), thickness=-1)
+            else:
+                cv2.circle(locMap, (x, y), int(rad), (255, 50, 50), thickness=-1)
+            if prev_point is not None:
+                cv2.line(locMap, (prev_point[0], prev_point[1]), (x, y), (0, 255, 0), 2)
+            prev_point = [x, y]
         locMap = cv2.resize(locMap, resolution)
         return locMap
 
@@ -235,10 +313,13 @@ class Environment():
         Valid means some place in open area.
         """
         if x is None:
-            gx, gy = random.choice(self.house.connectedCoors)
+            if self.startIndoor:
+                gx, gy = random.choice(self.house.indoorConnectedCoors)
+            else:
+                gx, gy = random.choice(self.house.connectedCoors)
             x, y = self.house.to_coor(gx, gy, True)
         if yaw is None:
-            yaw = np.random.rand() * 360 - 180
+            yaw = random.random() * 360 - 180#np.random.rand() * 360 - 180
         self.cam.pos.x = x
         self.cam.pos.y = self.house.robotHei
         self.cam.pos.z = y

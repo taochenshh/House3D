@@ -6,15 +6,16 @@
 //File: camera.hh
 
 #pragma once
-
+#include <iostream>
+#include <fstream>
 #include <vector>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include "lib/timer.hh"
 #include "lib/geometry.hh"
-
 namespace {
 const glm::vec3 WORLD_UP{0.f, 1.f, 0.f};
 // TODO change DEFAULT_NEAR to 0.01
@@ -22,6 +23,7 @@ const float DEFAULT_NEAR = 0.1f,
             DEFAULT_FAR = 100.f;
 const float DEFAULT_VERTICAL_FOV = 60.f;
 } // namespace
+namespace py=pybind11;
 
 namespace render {
 
@@ -47,7 +49,7 @@ class Camera {
       }
 
     glm::mat4 getView() const
-    { return glm::lookAt(pos, pos + front, up); }
+    {return glm::lookAt(pos, pos + front, up); }
 
     void shift(Movement dir, float dist);
 
@@ -66,6 +68,38 @@ class Camera {
           (float)geo.w / geo.h, near, far);
       glm::mat4 view = getView();
       return projection * view;
+    }
+
+    py::array_t<float> getCameraMatrixNumpy(const Geometry& geo) const {
+      glm::mat4 projection = glm::perspective(
+          glm::radians(vertical_fov),
+          (float)geo.w / geo.h, near, far);
+      glm::mat4 view = getView();
+      glm::mat4 camera_matrix = projection * view;
+      py::array_t<float> c_matrix = py::array_t<float>(16);
+      auto c_matrix_buf = c_matrix.request();
+      float *c_ptr = (float *) c_matrix_buf.ptr;
+      for (size_t i=0; i<4; ++i) {
+        for (size_t j=0; j<4; ++j) {
+          c_ptr[i*4 + j] = camera_matrix[j][i];
+        }
+      }
+      c_matrix.resize({4,4});
+      // return projection * view;
+      return c_matrix;
+    }
+    py::array_t<float> getExtrinsicsNumpy() const {
+      glm::mat4 camera_matrix = getView();
+      py::array_t<float> c_matrix = py::array_t<float>(16);
+      auto c_matrix_buf = c_matrix.request();
+      float *c_ptr = (float *) c_matrix_buf.ptr;
+      for (size_t i=0; i<4; ++i) {
+        for (size_t j=0; j<4; ++j) {
+          c_ptr[i*4 + j] = camera_matrix[j][i];
+        }
+      }
+      c_matrix.resize({4,4});
+      return c_matrix;
     }
 
   protected:

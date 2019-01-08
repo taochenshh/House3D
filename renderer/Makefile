@@ -15,6 +15,7 @@ endif
 OPTFLAGS ?= -O3 -msse3 -march=native
 #OPTFLAGS ?= -g3 -O0 #-fsanitize=address,undefined
 DEFINES = -DDEBUG
+
 INCLUDE_DIR += -I. -isystem vendor
 
 INCLUDE_DIR += $(shell pkg-config --cflags $(LIBS))
@@ -59,11 +60,11 @@ $(SO): $(OBJS) python/pybind.cc python/house.cc
 
 $(OBJS): $(OBJ_DIR)/%.o: %.cc
 	@echo "[cc] $< ..."
-	@$(CXX) -c $< -o $@ $(CXXFLAGS)
+	@$(CXX) -c $< -o $@ $(CXXFLAGS) $(SOFLAGS)
 
 $(MAIN_OBJS): $(OBJ_DIR)/%.o: %.cpp
 	@echo "[cpp] $< ..."
-	@$(CXX) -c $< -o $@ $(CXXFLAGS)
+	@$(CXX) -c $< -o $@ $(CXXFLAGS) $(SOFLAGS)
 
 $(DEPS): $(OBJ_DIR)/%.d: %.cc Makefile
 	@mkdir -p $(dir $@)

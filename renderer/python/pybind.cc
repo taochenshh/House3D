@@ -66,7 +66,9 @@ PYBIND11_MODULE(objrender, m) {
     .def_readwrite("vertical_fov", &Camera::vertical_fov) // init fov = 60
     .def_readonly("front", &Camera::front)  // init front = (0,0,1)
     .def_readonly("right", &Camera::right)
-    .def_readonly("up", &Camera::up);
+    .def_readonly("up", &Camera::up)
+    .def("getCameraMatrixNumpy", &Camera::getCameraMatrixNumpy, py::return_value_policy::reference)
+    .def("getExtrinsicsNumpy", &Camera::getExtrinsicsNumpy, py::return_value_policy::reference);
 
   py::class_<Geometry>(m, "Geometry")
     .def_readonly("w", &Geometry::w)
